@@ -106,3 +106,28 @@ class CFDExplorer:
 
         order = np.argsort(scores)[::-1]
         return X[order], preds[order], scores[order]
+
+if __name__ == "__main__":
+    from config import CHECKPOINT_PATH
+    import numpy as np
+
+    print("Loading CFD Explorer...")
+
+    explorer = CFDExplorer.from_checkpoint(CHECKPOINT_PATH, device="cpu")
+
+    print("Model loaded successfully.")
+
+    # dummy test input (adjust to match INPUT_PARAMS length)
+    X_test = np.random.uniform(0, 1, size=(5, len(INPUT_PARAMS)))
+
+    preds = explorer.predict(X_test)
+
+    print("\nPredictions (Cd, Cl, Cm):")
+    print(preds)
+
+    best_X, best_preds, best_scores = explorer.optimize(n_samples=1000)
+
+    print("\nBest design found:")
+    print(best_X[0])
+    print("Pred:", best_preds[0])
+    print("Score:", best_scores[0])
