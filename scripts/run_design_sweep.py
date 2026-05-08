@@ -13,6 +13,7 @@ import subprocess
 from pathlib import Path
 
 import pandas as pd
+import numpy as np
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -28,6 +29,110 @@ def set_cfg_value(cfg_text: str, key: str, value: float) -> str:
     if pattern.search(cfg_text):
         return pattern.sub(new_line, cfg_text)
     return cfg_text.rstrip() + f"\n{new_line}\n"
+
+
+def parse_su2_mesh(mesh_path: Path) -> tuple[list[str], int, int, set[int]]:
+    lines = mesh_path.read_text(encoding="utf-8").splitlines()
+
+    npoin_idx = None
+    npoin = None
+    for i, line in enumerate(lines):
+        if line.startswith("NPOIN="):
+            npoin_idx = i
+            npoin = int(line.split("=")[1].strip())
+            break
+    if npoin_idx is None or npoin is None:
+        raise ValueError(f"Could not parse NPOIN in {mesh_path}")
+
+    point_start = npoin_idx + 1
+    point_end = point_start + npoin
+
+    airfoil_nodes: set[int] = set()
+    i = point_end
+    while i < len(lines):
+        line = lines[i].strip()
+        if line.startswith("MARKER_TAG="):
+            tag = line.split("=")[1].strip()
+            elems_line = lines[i + 1].strip()
+            if not elems_line.startswith("MARKER_ELEMS="):
+                raise ValueError("Malformed marker block")
+            n_elem = int(elems_line.split("=")[1].strip())
+            start = i + 2
+            end = start + n_elem
+            if tag == "airfoil":
+                for j in range(start, end):
+                    parts = lines[j].split()
+                    # Edge element format: 3 node_i node_j
+                    if len(parts) >= 3:
+                        airfoil_nodes.add(int(parts[1]))
+                        airfoil_nodes.add(int(parts[2]))
+            i = end
+        else:
+            i += 1
+
+    if not airfoil_nodes:
+        raise ValueError(f"No airfoil marker nodes found in {mesh_path}")
+    return lines, point_start, point_end, airfoil_nodes
+
+
+def naca_camber_line(x: np.ndarray, m: float, p: float) -> np.ndarray:
+    p = float(np.clip(p, 1e-3, 0.999))
+    yc = np.where(
+        x < p,
+        m / (p**2) * (2 * p * x - x**2),
+        m / ((1 - p) ** 2) * ((1 - 2 * p) + 2 * p * x - x**2),
+    )
+    return yc
+
+
+def naca_thickness_dist(x: np.ndarray, t: float) -> np.ndarray:
+    # Classic NACA thickness polynomial.
+    return 5 * t * (
+        0.2969 * np.sqrt(np.maximum(x, 1e-8))
+        - 0.1260 * x
+        - 0.3516 * x**2
+        + 0.2843 * x**3
+        - 0.1015 * x**4
+    )
+
+
+def deform_airfoil_mesh(
+    mesh_in: Path,
+    mesh_out: Path,
+    thickness: float,
+    camber: float,
+    camber_pos: float,
+) -> dict:
+    lines, p_start, p_end, airfoil_nodes = parse_su2_mesh(mesh_in)
+
+    coords = {}
+    for li in range(p_start, p_end):
+        parts = lines[li].split()
+        x, y, idx = float(parts[0]), float(parts[1]), int(parts[2])
+        coords[idx] = (x, y, li)
+
+    airfoil_xy = np.array([[coords[n][0], coords[n][1]] for n in sorted(airfoil_nodes)], dtype=float)
+    x_min = float(np.min(airfoil_xy[:, 0]))
+    x_max = float(np.max(airfoil_xy[:, 0]))
+    chord = max(x_max - x_min, 1e-8)
+
+    # Use original sign around y=0 as upper/lower discriminator.
+    for n in airfoil_nodes:
+        x, y, li = coords[n]
+        x_norm = np.clip((x - x_min) / chord, 0.0, 1.0)
+        yc = float(naca_camber_line(np.array([x_norm]), camber, camber_pos)[0]) * chord
+        yt = float(naca_thickness_dist(np.array([x_norm]), thickness)[0]) * chord
+        sign = 1.0 if y >= 0.0 else -1.0
+        y_new = yc + sign * yt
+        lines[li] = f"\t{x:.15e}\t{y_new:.15e}\t{n}"
+
+    mesh_out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return {
+        "airfoil_node_count": int(len(airfoil_nodes)),
+        "x_min": x_min,
+        "x_max": x_max,
+        "chord": chord,
+    }
 
 
 def extract_coeff(text: str, coeff: str) -> float | None:
@@ -62,6 +167,9 @@ def run_case(case_dir: Path, cfg_file: Path, retry_max: int) -> tuple[str, int, 
             cd = extract_coeff(txt, "CD")
 
         if cl is not None and cd is not None:
+            # Coarse physical sanity checks for robust dataset quality.
+            if cd <= 0 or cd > 2.0 or abs(cl) > 3.0:
+                continue
             return "success", attempt, cl, cd
     return "failed", retry_max + 1, None, None
 
@@ -117,8 +225,16 @@ def main() -> None:
         cfg_path = case_dir / args.cfg.name
         cfg_path.write_text(cfg_text, encoding="utf-8")
 
-        if mesh_file.exists():
-            shutil.copy2(mesh_file, case_dir / mesh_file.name)
+        if not mesh_file.exists():
+            raise FileNotFoundError(mesh_file)
+        mesh_case_path = case_dir / mesh_file.name
+        mesh_meta = deform_airfoil_mesh(
+            mesh_in=mesh_file,
+            mesh_out=mesh_case_path,
+            thickness=float(row["geometry_thickness"]),
+            camber=float(row["geometry_camber"]),
+            camber_pos=float(row["geometry_camber_pos"]),
+        )
 
         status, attempts, cl, cd = run_case(case_dir, cfg_path, args.retry_max)
         cl_cd = (cl / cd) if (cl is not None and cd not in (None, 0.0)) else None
@@ -139,6 +255,7 @@ def main() -> None:
                 "cl_cd": cl_cd,
                 "status": status,
                 "attempts": attempts,
+                "airfoil_node_count": mesh_meta["airfoil_node_count"],
                 "case_dir": str(case_dir.relative_to(ROOT)),
             }
         )

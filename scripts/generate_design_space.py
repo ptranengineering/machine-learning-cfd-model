@@ -37,13 +37,14 @@ def main() -> None:
 
     # Initial geometry representation:
     # thickness, camber, camber_position (simple parametric basis)
+    # Conservative bounds to reduce mesh-pathology risk during geometry deformation.
     ranges = {
-        "geometry_thickness": (0.08, 0.18),
-        "geometry_camber": (0.00, 0.06),
-        "geometry_camber_pos": (0.20, 0.60),
-        "aoa": (-2.0, 14.0),
-        "mach": (0.65, 0.82),
-        "reynolds": (2.0e6, 12.0e6),
+        "geometry_thickness": (0.10, 0.16),
+        "geometry_camber": (0.00, 0.04),
+        "geometry_camber_pos": (0.30, 0.50),
+        "aoa": (0.0, 10.0),
+        "mach": (0.68, 0.80),
+        "reynolds": (3.0e6, 10.0e6),
     }
     columns = list(ranges.keys())
 

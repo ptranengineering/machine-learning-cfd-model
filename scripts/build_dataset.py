@@ -238,6 +238,9 @@ def build_design_dataset(raw_csv: Path) -> pd.DataFrame:
 
     for col in ["geometry_thickness", "geometry_camber", "geometry_camber_pos", "aoa", "mach", "reynolds", "cl", "cd"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df[(df["cd"] >= 0.002) & (df["cd"] <= 2.0) & (df["cl"].abs() <= 3.0)].copy()
+    if df.empty:
+        raise RuntimeError("No design rows survived physical quality filters (cd/cl bounds).")
     df["cl_cd"] = df["cl"] / df["cd"]
     df["geometry_param_1"] = df["geometry_thickness"]
     df["geometry_param_2"] = df["geometry_camber"]
