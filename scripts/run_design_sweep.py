@@ -179,7 +179,17 @@ def main() -> None:
     p.add_argument("--design-space", type=Path, default=DEFAULT_DESIGN_SPACE)
     p.add_argument("--cfg", type=Path, default=DEFAULT_CFG)
     p.add_argument("--raw-output", type=Path, default=DEFAULT_RAW_DATA)
-    p.add_argument("--retry-max", type=int, default=1)
+    p.add_argument(
+        "--retry-max",
+        type=int,
+        default=3,
+        help="Retries per case (beyond first attempt) before marking failed.",
+    )
+    p.add_argument(
+        "--append-raw-output",
+        action="store_true",
+        help="Append rows to raw-output CSV instead of overwriting (same columns expected).",
+    )
     p.add_argument("--limit", type=int, default=0, help="Optional cap for smoke tests.")
     args = p.parse_args()
 
@@ -262,6 +272,15 @@ def main() -> None:
 
     out_df = pd.DataFrame(rows)
     args.raw_output.parent.mkdir(parents=True, exist_ok=True)
+    if args.append_raw_output and args.raw_output.exists():
+        prev_df = pd.read_csv(args.raw_output)
+        cols_prev = list(prev_df.columns)
+        cols_new = list(out_df.columns)
+        if cols_prev != cols_new:
+            raise ValueError(
+                f"--append-raw-output column mismatch: existing has {cols_prev}, new run has {cols_new}"
+            )
+        out_df = pd.concat([prev_df, out_df], ignore_index=True)
     out_df.to_csv(args.raw_output, index=False)
     print(f"[DONE] run_id={run_id}")
     print(f"[DONE] wrote {len(out_df)} rows to {args.raw_output}")

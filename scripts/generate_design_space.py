@@ -33,18 +33,53 @@ def main() -> None:
     p.add_argument("--n-samples", type=int, default=40)
     p.add_argument("--sampler", choices=["lhs", "random"], default="lhs")
     p.add_argument("--seed", type=int, default=42)
+    # Optional bound overrides so you can narrow the space for SU2 convergence / surrogate quality.
+    p.add_argument(
+        "--geometry-thickness-range",
+        nargs=2,
+        type=float,
+        default=[0.10, 0.16],
+        metavar=("LO", "HI"),
+        help="Thickness bounds (fraction of chord)",
+    )
+    p.add_argument(
+        "--geometry-camber-range",
+        nargs=2,
+        type=float,
+        default=[0.00, 0.04],
+        metavar=("LO", "HI"),
+        help="Camber magnitude bounds",
+    )
+    p.add_argument(
+        "--geometry-camber-pos-range",
+        nargs=2,
+        type=float,
+        default=[0.30, 0.50],
+        metavar=("LO", "HI"),
+        help="Position of maximum camber (fraction of chord)",
+    )
+    p.add_argument("--aoa-range", nargs=2, type=float, default=[0.0, 6.0], metavar=("LO", "HI"), help="Angle of attack (deg)")
+    p.add_argument("--mach-range", nargs=2, type=float, default=[0.68, 0.80], metavar=("LO", "HI"))
+    p.add_argument(
+        "--reynolds-range",
+        nargs=2,
+        type=float,
+        default=[3.0e6, 10.0e6],
+        metavar=("LO", "HI"),
+        help="Freestream Reynolds number",
+    )
     args = p.parse_args()
 
     # Initial geometry representation:
     # thickness, camber, camber_position (simple parametric basis)
     # Conservative bounds to reduce mesh-pathology risk during geometry deformation.
     ranges = {
-        "geometry_thickness": (0.10, 0.16),
-        "geometry_camber": (0.00, 0.04),
-        "geometry_camber_pos": (0.30, 0.50),
-        "aoa": (0.0, 10.0),
-        "mach": (0.68, 0.80),
-        "reynolds": (3.0e6, 10.0e6),
+        "geometry_thickness": (args.geometry_thickness_range[0], args.geometry_thickness_range[1]),
+        "geometry_camber": (args.geometry_camber_range[0], args.geometry_camber_range[1]),
+        "geometry_camber_pos": (args.geometry_camber_pos_range[0], args.geometry_camber_pos_range[1]),
+        "aoa": (args.aoa_range[0], args.aoa_range[1]),
+        "mach": (args.mach_range[0], args.mach_range[1]),
+        "reynolds": (args.reynolds_range[0], args.reynolds_range[1]),
     }
     columns = list(ranges.keys())
 

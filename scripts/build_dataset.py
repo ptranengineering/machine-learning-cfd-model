@@ -213,10 +213,22 @@ def quality_gate(
     return merged
 
 
-def build_design_dataset(raw_csv: Path) -> pd.DataFrame:
-    if not raw_csv.exists():
-        raise FileNotFoundError(raw_csv)
-    df = pd.read_csv(raw_csv)
+def build_design_dataset(raw_csv_paths: list[Path]) -> pd.DataFrame:
+    dfs: list[pd.DataFrame] = []
+    for raw_csv in raw_csv_paths:
+        if not raw_csv.exists():
+            raise FileNotFoundError(raw_csv)
+        dfs.append(pd.read_csv(raw_csv))
+    df = pd.concat(dfs, ignore_index=True)
+
+    dup_subset = ["geometry_thickness", "geometry_camber", "geometry_camber_pos", "aoa", "mach", "reynolds"]
+    missing_dup = [c for c in dup_subset if c not in df.columns]
+    if not missing_dup:
+        before = len(df)
+        df = df.drop_duplicates(subset=dup_subset, keep="last")
+        dropped = before - len(df)
+        if dropped:
+            print(f"[INFO] dropped {dropped} duplicate design/flow rows (kept newest occurrence)")
     required = [
         "geometry_thickness",
         "geometry_camber",
@@ -261,7 +273,13 @@ def main() -> None:
     parser.add_argument("--geometry-id", default="NACA0012")
     parser.add_argument("--output", type=Path, default=OUTPUT_DEFAULT)
     parser.add_argument("--quality-report", type=Path, default=QUALITY_REPORT_DEFAULT)
-    parser.add_argument("--design-raw", type=Path, default=DESIGN_RAW_DEFAULT)
+    parser.add_argument(
+        "--design-raw",
+        type=Path,
+        nargs="+",
+        default=[DESIGN_RAW_DEFAULT],
+        help="One or more raw design sweep CSVs to merge before processing.",
+    )
     parser.add_argument("--design-output", type=Path, default=DESIGN_OUTPUT_DEFAULT)
     parser.add_argument("--min-rms-rho-final", type=float, default=-6.0)
     parser.add_argument("--min-rms-drop", type=float, default=4.0)
@@ -271,7 +289,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.dataset_type == "design":
-        design_df = build_design_dataset(args.design_raw)
+        design_df = build_design_dataset(list(args.design_raw))
         numeric_cols = [
             "geometry_param_1",
             "geometry_param_2",

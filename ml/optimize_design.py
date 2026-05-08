@@ -15,6 +15,8 @@ import numpy as np
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern, WhiteKernel
 
+from design_feature_utils import augment_design_inputs_v1
+
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MODEL = ROOT / "results" / "models" / "design_rf_model.joblib"
@@ -39,6 +41,14 @@ def sample_candidates(n: int, seed: int) -> np.ndarray:
     return lo + (hi - lo) * u
 
 
+def augment_if_needed(base_x: np.ndarray, augment_version: int) -> np.ndarray:
+    """Match training-time augmentation for loaded surrogate checkpoints."""
+    if augment_version <= 0:
+        return base_x
+    aug_x, _ = augment_design_inputs_v1(base_x)
+    return aug_x
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="Bayesian optimize design using surrogate.")
     p.add_argument("--model", type=Path, default=DEFAULT_MODEL)
@@ -53,9 +63,10 @@ def main() -> None:
 
     pack = joblib.load(args.model)
     surrogate = pack["model"]
+    augment_version = int(pack.get("augment_version", 0))
 
     x_obs = sample_candidates(args.init_samples, args.seed)
-    pred = surrogate.predict(x_obs)
+    pred = surrogate.predict(augment_if_needed(x_obs, augment_version))
     cl = pred[:, 0]
     cd = pred[:, 1]
     feasible = (cl >= args.min_cl) & (cd <= args.max_cd) & (cd > 0)
@@ -71,7 +82,7 @@ def main() -> None:
         ei = expected_improvement(mu, std, float(np.max(y_obj)))
         x_next = pool[int(np.argmax(ei))]
 
-        pred_next = surrogate.predict(x_next.reshape(1, -1))[0]
+        pred_next = surrogate.predict(augment_if_needed(x_next.reshape(1, -1), augment_version))[0]
         cl_n, cd_n = float(pred_next[0]), float(pred_next[1])
         feasible_n = cl_n >= args.min_cl and cd_n <= args.max_cd and cd_n > 0
         y_next = (cl_n / cd_n) if feasible_n else -1e6
@@ -81,7 +92,7 @@ def main() -> None:
 
     best_idx = int(np.argmax(y_obj))
     best_x = x_obs[best_idx]
-    best_pred = surrogate.predict(best_x.reshape(1, -1))[0]
+    best_pred = surrogate.predict(augment_if_needed(best_x.reshape(1, -1), augment_version))[0]
     result = {
         "objective": "maximize CL/CD",
         "constraints": {"min_cl": args.min_cl, "max_cd": args.max_cd},

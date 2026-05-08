@@ -18,6 +18,8 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import RepeatedKFold, train_test_split
 from sklearn.multioutput import MultiOutputRegressor
 
+from design_feature_utils import BASE_COLS, augment_design_inputs_v1
+
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATA = ROOT / "datasets" / "processed" / "aero_design_dataset.csv"
@@ -72,23 +74,25 @@ def main() -> None:
     p.add_argument("--test-size", type=float, default=0.2)
     p.add_argument("--cv-splits", type=int, default=5)
     p.add_argument("--cv-repeats", type=int, default=5)
+    p.add_argument(
+        "--engineer-features",
+        action="store_true",
+        help=f"Augment BASE inputs with nonlinear transforms ({', '.join(BASE_COLS)} -> +extras). "
+        "If enabled, saved model metadata records augment_version=1.",
+    )
     args = p.parse_args()
 
     df = pd.read_csv(args.data)
-    feature_cols = [
-        "geometry_param_1",
-        "geometry_param_2",
-        "geometry_param_3",
-        "AoA",
-        "Mach",
-        "Re",
-    ]
+    feature_cols = list(BASE_COLS)
     target_cols = ["CL", "CD"]
     missing = [c for c in feature_cols + target_cols if c not in df.columns]
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
 
-    x = df[feature_cols].to_numpy(dtype=float)
+    x = df[BASE_COLS].to_numpy(dtype=float)
+    augment_version = 1 if args.engineer_features else 0
+    if args.engineer_features:
+        x, feature_cols = augment_design_inputs_v1(x)
     y = df[target_cols].to_numpy(dtype=float)
 
     if len(df) < 8:
@@ -169,7 +173,15 @@ def main() -> None:
     selected_model = models[best_cv["model"]]
     selected_model.fit(x, y)
     args.model_out.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump({"model": selected_model, "feature_cols": feature_cols, "target_cols": target_cols}, args.model_out)
+    joblib.dump(
+        {
+            "model": selected_model,
+            "feature_cols": feature_cols,
+            "target_cols": target_cols,
+            "augment_version": augment_version,
+        },
+        args.model_out,
+    )
 
     args.metrics.parent.mkdir(parents=True, exist_ok=True)
     with args.metrics.open("w", encoding="utf-8") as f:

@@ -1,0 +1,20 @@
+---
+description: Preserve continuity at the start of each new session
+alwaysApply: true
+---
+
+# Session Continuity
+
+At the start of each new agent session in this repository:
+
+- Give a short continuity recap (3-6 bullets) of the most recent relevant work.
+- Include concrete references when possible (changed files, key outputs, pending tasks).
+- Ask one focused confirmation question before proceeding if user intent is ambiguous.
+
+Prioritize practical continuity details:
+
+- What was completed last.
+- What is currently in progress or blocked.
+- What the next best action is.
+
+Do not fabricate prior context. If prior context is missing, say so briefly and ask what to continue.

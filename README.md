@@ -296,6 +296,42 @@ NEXT STEPS AFTER TRAINING:
    - Or open-access journal (Frontiers, etc.)
 
 
+SU2 DESIGN-SPACE SURROGATE (~5 percent MAPE GOAL):
+=================================================
+
+This workflow trains on `datasets/processed/aero_design_dataset.csv` (ignored by Git; rebuilt locally):
+
+1. Generate LHS samples into `datasets/raw/design_space.csv`:
+   ```
+   ./.venv/bin/python scripts/generate_design_space.py --n-samples 200 --seed 1
+   ```
+   Defaults use a narrower AoA window (deg 0-6, see script) because high angles often fail SU2 convergence with large geometry changes.
+
+2. Run SU2 for each sample (writes `datasets/raw/aero_design_raw.csv` by default).
+   Retry more attempts before failing:
+   ```
+   ./.venv/bin/python scripts/run_design_sweep.py --retry-max 5
+   ```
+
+3. Subsequent sweeps append instead of overwriting the raw CSV so you can accumulate data across runs:
+   ```
+   ./.venv/bin/python scripts/run_design_sweep.py --retry-max 5 --append-raw-output --design-space datasets/raw/design_space_more.csv
+   ```
+
+4. Build the merged processed dataset from one or more raw CSV snapshots:
+   ```
+   ./.venv/bin/python scripts/build_dataset.py --dataset-type design \
+     --design-raw datasets/raw/aero_design_raw.csv datasets/raw/aero_design_archive.csv
+   ```
+   Rows with identical `(thickness,camber,pos,AoA,Mach,Re)` are deduped (last wins).
+
+5. Retrain the surrogate baseline (optional engineered features recommended after you have sufficient successful rows):
+   ```
+   cd ml
+   ../.venv/bin/python train_design_baseline.py --engineer-features
+   ```
+   Passing the built-in readiness gate (~5 percent MAPE vs target range plus high R²) typically requires hundreds of converged SU2 cases; if metrics plateau around ~8 percent on small N, generate more CFD data before trusting optimization outputs.
+
 REFERENCES FOR PAPER:
 =====================
 

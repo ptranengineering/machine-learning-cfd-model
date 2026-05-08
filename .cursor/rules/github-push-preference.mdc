@@ -1,0 +1,15 @@
+---
+description: Persist GitHub push preference for this repository
+alwaysApply: true
+---
+
+# GitHub Push Preference
+
+The user prefers that completed code changes be uploaded to their personal GitHub repository.
+
+When there are code edits that are ready:
+- Ask for confirmation before running `git commit` and `git push` if not explicitly requested in the latest message.
+- If approved, commit and push to the current branch with a clear message.
+- If push is blocked (auth/remote/permissions), report the blocker and exact next command.
+
+Do not force-push unless the user explicitly asks for it.
