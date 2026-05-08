@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CASE_ROOT = ROOT / "su2_cases"
 OUTPUT_DEFAULT = ROOT / "datasets" / "processed" / "aero_ml_dataset.csv"
 CFG_DEFAULT = CASE_ROOT / "inv_NACA0012.cfg"
+QUALITY_REPORT_DEFAULT = ROOT / "datasets" / "processed" / "aero_ml_quality_report.csv"
 
 
 def parse_cfg_value(cfg_path: Path, key: str) -> float | None:
@@ -158,19 +159,65 @@ def validate_dataset(df: pd.DataFrame) -> None:
         raise ValueError("Inconsistent row counts: duplicate AoA values found.")
 
 
+def quality_gate(
+    df: pd.DataFrame,
+    min_rms_rho_final: float,
+    min_rms_drop: float,
+    max_abs_cl: float,
+    min_cd: float,
+) -> pd.DataFrame:
+    checks = pd.DataFrame(index=df.index)
+    checks["pass_cd_positive"] = df["cd"] >= min_cd
+    checks["pass_cl_physical"] = df["cl"].abs() <= max_abs_cl
+    checks["pass_history"] = df["has_history"] == 1
+    checks["pass_converged_residual"] = df["rms_rho_final"] <= min_rms_rho_final
+    checks["pass_residual_drop"] = df["rms_rho_drop"] >= min_rms_drop
+    checks["quality_pass"] = checks.all(axis=1)
+
+    merged = pd.concat([df.copy(), checks], axis=1)
+    return merged
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build processed ML dataset from SU2 outputs.")
     parser.add_argument("--case-root", type=Path, default=CASE_ROOT)
     parser.add_argument("--cfg", type=Path, default=CFG_DEFAULT)
     parser.add_argument("--geometry-id", default="NACA0012")
     parser.add_argument("--output", type=Path, default=OUTPUT_DEFAULT)
+    parser.add_argument("--quality-report", type=Path, default=QUALITY_REPORT_DEFAULT)
+    parser.add_argument("--min-rms-rho-final", type=float, default=-6.0)
+    parser.add_argument("--min-rms-drop", type=float, default=4.0)
+    parser.add_argument("--max-abs-cl", type=float, default=3.0)
+    parser.add_argument("--min-cd", type=float, default=1e-6)
+    parser.add_argument("--allow-failed-quality", action="store_true")
     args = parser.parse_args()
 
     df = build_dataset(args.case_root, args.cfg, args.geometry_id)
     validate_dataset(df)
+    quality_df = quality_gate(
+        df=df,
+        min_rms_rho_final=args.min_rms_rho_final,
+        min_rms_drop=args.min_rms_drop,
+        max_abs_cl=args.max_abs_cl,
+        min_cd=args.min_cd,
+    )
+
+    passed = quality_df[quality_df["quality_pass"]].copy()
+    failed = quality_df[~quality_df["quality_pass"]].copy()
+    if not args.allow_failed_quality and len(failed) > 0:
+        display_cols = ["aoa", "cl", "cd", "rms_rho_final", "rms_rho_drop", "quality_pass"]
+        raise ValueError(
+            "Quality gate failed for one or more cases. "
+            "Review datasets/processed/aero_ml_quality_report.csv\n"
+            f"{failed[display_cols].to_string(index=False)}"
+        )
+
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(args.output, index=False)
-    print(f"[DONE] wrote {len(df)} rows to {args.output}")
+    passed.to_csv(args.output, index=False)
+    quality_df.to_csv(args.quality_report, index=False)
+    print(f"[DONE] wrote {len(passed)} quality-passed rows to {args.output}")
+    print(f"[DONE] quality report saved to {args.quality_report}")
+    print(f"[INFO] quality passed={len(passed)} failed={len(failed)}")
 
 
 if __name__ == "__main__":
