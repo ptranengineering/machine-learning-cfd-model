@@ -19,6 +19,8 @@ CASE_ROOT = ROOT / "su2_cases"
 OUTPUT_DEFAULT = ROOT / "datasets" / "processed" / "aero_ml_dataset.csv"
 CFG_DEFAULT = CASE_ROOT / "inv_NACA0012.cfg"
 QUALITY_REPORT_DEFAULT = ROOT / "datasets" / "processed" / "aero_ml_quality_report.csv"
+DESIGN_RAW_DEFAULT = ROOT / "datasets" / "raw" / "aero_design_raw.csv"
+DESIGN_OUTPUT_DEFAULT = ROOT / "datasets" / "processed" / "aero_design_dataset.csv"
 
 
 def parse_cfg_value(cfg_path: Path, key: str) -> float | None:
@@ -211,19 +213,81 @@ def quality_gate(
     return merged
 
 
+def build_design_dataset(raw_csv: Path) -> pd.DataFrame:
+    if not raw_csv.exists():
+        raise FileNotFoundError(raw_csv)
+    df = pd.read_csv(raw_csv)
+    required = [
+        "geometry_thickness",
+        "geometry_camber",
+        "geometry_camber_pos",
+        "aoa",
+        "mach",
+        "reynolds",
+        "cl",
+        "cd",
+        "status",
+    ]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise ValueError(f"Design raw dataset missing columns: {missing}")
+
+    df = df[df["status"] == "success"].copy()
+    if df.empty:
+        raise RuntimeError("No successful design-space CFD cases found.")
+
+    for col in ["geometry_thickness", "geometry_camber", "geometry_camber_pos", "aoa", "mach", "reynolds", "cl", "cd"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df["cl_cd"] = df["cl"] / df["cd"]
+    df["geometry_param_1"] = df["geometry_thickness"]
+    df["geometry_param_2"] = df["geometry_camber"]
+    df["geometry_param_3"] = df["geometry_camber_pos"]
+    df["AoA"] = df["aoa"]
+    df["Mach"] = df["mach"]
+    df["Re"] = df["reynolds"]
+    df["CL"] = df["cl"]
+    df["CD"] = df["cd"]
+    return df
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build processed ML dataset from SU2 outputs.")
+    parser.add_argument("--dataset-type", choices=["aero", "design"], default="aero")
     parser.add_argument("--case-root", type=Path, default=CASE_ROOT)
     parser.add_argument("--cfg", type=Path, default=CFG_DEFAULT)
     parser.add_argument("--geometry-id", default="NACA0012")
     parser.add_argument("--output", type=Path, default=OUTPUT_DEFAULT)
     parser.add_argument("--quality-report", type=Path, default=QUALITY_REPORT_DEFAULT)
+    parser.add_argument("--design-raw", type=Path, default=DESIGN_RAW_DEFAULT)
+    parser.add_argument("--design-output", type=Path, default=DESIGN_OUTPUT_DEFAULT)
     parser.add_argument("--min-rms-rho-final", type=float, default=-6.0)
     parser.add_argument("--min-rms-drop", type=float, default=4.0)
     parser.add_argument("--max-abs-cl", type=float, default=3.0)
     parser.add_argument("--min-cd", type=float, default=1e-6)
     parser.add_argument("--allow-failed-quality", action="store_true")
     args = parser.parse_args()
+
+    if args.dataset_type == "design":
+        design_df = build_design_dataset(args.design_raw)
+        numeric_cols = [
+            "geometry_param_1",
+            "geometry_param_2",
+            "geometry_param_3",
+            "AoA",
+            "Mach",
+            "Re",
+            "CL",
+            "CD",
+            "cl_cd",
+        ]
+        if design_df[numeric_cols].isna().any().any():
+            raise ValueError("NaN values found in design dataset numeric fields.")
+        if not np.isfinite(design_df[numeric_cols].to_numpy(dtype=float)).all():
+            raise ValueError("Non-finite values found in design dataset numeric fields.")
+        args.design_output.parent.mkdir(parents=True, exist_ok=True)
+        design_df.to_csv(args.design_output, index=False)
+        print(f"[DONE] wrote {len(design_df)} rows to {args.design_output}")
+        return
 
     df = build_dataset(args.case_root, args.cfg, args.geometry_id)
     validate_dataset(df)
