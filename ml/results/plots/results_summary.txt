@@ -1,0 +1,33 @@
+======================================================================
+CFD SURROGATE MODEL - RESULTS SUMMARY
+======================================================================
+
+TRAINING SUMMARY:
+  Final Training Loss:      8.7287e-02
+  Final Validation Loss:    4.3338e-02
+  Best Validation Loss:     4.3338e-02
+
+TEST SET PERFORMANCE:
+  Test Loss (MSE):          2.3562e-02
+  Mean Absolute Error:      1.3419e-01
+  Root Mean Squared Error:  1.7264e-01
+  R² Score:                 0.9627
+
+PER-OUTPUT METRICS (Test Set):
+
+  Cd:
+    MAE:  1.2480e-02
+    RMSE: 1.6058e-02
+    R²:   0.9333
+
+  Cl:
+    MAE:  4.6245e-02
+    RMSE: 5.7555e-02
+    R²:   0.9750
+
+  Cm:
+    MAE:  1.2927e-02
+    RMSE: 1.6737e-02
+    R²:   0.9567
+
+======================================================================
