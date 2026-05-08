@@ -6,6 +6,7 @@ Convert raw SU2 case outputs into ML-ready aerodynamic dataset.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 from pathlib import Path
 
@@ -32,6 +33,16 @@ def parse_cfg_value(cfg_path: Path, key: str) -> float | None:
             except ValueError:
                 return None
     return None
+
+
+def load_case_meta(case_dir: Path) -> dict:
+    meta_path = case_dir / "case_meta.json"
+    if not meta_path.exists():
+        return {}
+    try:
+        return json.loads(meta_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
 
 
 def extract_coeff(forces_file: Path, coeff: str) -> float | None:
@@ -92,13 +103,32 @@ def build_dataset(case_root: Path, cfg_path: Path, geometry_id: str) -> pd.DataF
     reynolds = 0.0 if reynolds is None else reynolds
 
     rows: list[dict] = []
-    for case_dir in sorted(case_root.glob("AoA_*")):
-        if not case_dir.is_dir():
-            continue
-        match = re.match(r"^AoA_([+-]?\d*\.?\d+)$", case_dir.name)
-        if not match:
-            continue
-        aoa = float(match.group(1))
+    run_case_dirs = {
+        path.parent
+        for path in case_root.glob("runs/*/cases/*/forces_breakdown.dat")
+    }
+    legacy_case_dirs = {path for path in case_root.glob("AoA_*") if path.is_dir()}
+    case_dirs = sorted(run_case_dirs.union(legacy_case_dirs))
+
+    for case_dir in case_dirs:
+        case_meta = load_case_meta(case_dir)
+        if case_meta:
+            if case_meta.get("status") != "success":
+                continue
+            aoa = float(case_meta.get("aoa", 0.0))
+            case_mach = float(case_meta.get("mach", mach))
+            case_re = float(case_meta.get("reynolds", reynolds))
+            run_id = case_meta.get("run_id", "legacy")
+            case_id = case_meta.get("case_id", case_dir.name)
+        else:
+            match = re.match(r"^AoA_([+-]?\d*\.?\d+)$", case_dir.name)
+            if not match:
+                continue
+            aoa = float(match.group(1))
+            case_mach = mach
+            case_re = reynolds
+            run_id = "legacy"
+            case_id = case_dir.name
 
         forces_file = case_dir / "forces_breakdown.dat"
         if not forces_file.exists():
@@ -112,10 +142,12 @@ def build_dataset(case_root: Path, cfg_path: Path, geometry_id: str) -> pd.DataF
         rows.append(
             {
                 "geometry_id": geometry_id,
+                "run_id": run_id,
+                "case_id": case_id,
                 "aoa": aoa,
                 "aoa_squared": aoa**2,
-                "mach": mach,
-                "reynolds": reynolds,
+                "mach": case_mach,
+                "reynolds": case_re,
                 "cl": cl,
                 "cd": cd,
                 "cl_cd": (cl / cd) if cd != 0 else np.nan,
@@ -155,8 +187,9 @@ def validate_dataset(df: pd.DataFrame) -> None:
     if not np.isfinite(df[numeric_cols].to_numpy(dtype=float)).all():
         raise ValueError("Non-finite values detected in numeric dataset columns.")
 
-    if len(df) != df["aoa"].nunique():
-        raise ValueError("Inconsistent row counts: duplicate AoA values found.")
+    if "run_id" in df.columns and "case_id" in df.columns:
+        if len(df) != len(df[["run_id", "case_id"]].drop_duplicates()):
+            raise ValueError("Inconsistent row counts: duplicate case identifiers found.")
 
 
 def quality_gate(

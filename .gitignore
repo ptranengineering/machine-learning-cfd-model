@@ -11,6 +11,7 @@ restart_flow*
 history.csv
 surface_flow.csv
 output_*.txt
+su2_cases/runs/
 
 # SU2 outputs
 flow.*
