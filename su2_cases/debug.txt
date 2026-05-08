@@ -1,0 +1,2 @@
+Look for: f
+str.length() = 1

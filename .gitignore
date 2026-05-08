@@ -1,7 +1,30 @@
+# Python
 __pycache__/
 *.pyc
+cfd_env/
+.venv/
 
+# CFD outputs
+*.vtu
+*.dat
+restart_flow*
+history.csv
+surface_flow.csv
+output_*.txt
+
+# SU2 outputs
+flow.*
+restart.*
+
+# Dataset outputs
+datasets/raw/*
+datasets/processed/*
 data/
 results/
 
-.venv/
+# OS
+.DS_Store
+Thumbs.db
+
+# Cursor / VSCode
+.vscode/
