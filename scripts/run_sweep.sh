@@ -24,6 +24,11 @@ extract_coeff_forces() {
     awk -F'[:|]' -v k="${key}" '$1 ~ ("^Total " k "$") {gsub(/[[:space:]]+/, "", $2); print $2; exit}' "${file}"
 }
 
+extract_cfg_aoa() {
+    local cfg="$1"
+    awk -F'=' '/^AOA=/{gsub(/[[:space:]]+/, "", $2); print $2; exit}' "${cfg}"
+}
+
 extract_coeff_output() {
     local key="$1"
     local file="$2"
@@ -40,6 +45,15 @@ validate_row_is_numeric() {
         return 1
     fi
 }
+
+CFG_PATH="${CASE_ROOT}/${CFG_FILE}"
+ORIGINAL_AOA="$(extract_cfg_aoa "${CFG_PATH}")"
+restore_cfg_aoa() {
+    if [[ -n "${ORIGINAL_AOA:-}" ]]; then
+        sed -i -E "s/^AOA=.*/AOA= ${ORIGINAL_AOA}/" "${CFG_PATH}"
+    fi
+}
+trap restore_cfg_aoa EXIT
 
 if [[ -n "${AOA_LIST_OVERRIDE}" ]]; then
     # shellcheck disable=SC2206
@@ -58,7 +72,7 @@ for aoa in "${AOA_LIST[@]}"; do
     case_dir="${CASE_ROOT}/AoA_${aoa}"
     mkdir -p "${case_dir}"
 
-    sed -i -E "s/^AOA=.*/AOA= ${aoa}/" "${CASE_ROOT}/${CFG_FILE}"
+    sed -i -E "s/^AOA=.*/AOA= ${aoa}/" "${CFG_PATH}"
 
     output_file="${case_dir}/output_${aoa}.txt"
     if ! (cd "${CASE_ROOT}" && SU2_CFD "${CFG_FILE}" > "${output_file}" 2>&1); then
