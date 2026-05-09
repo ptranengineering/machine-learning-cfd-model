@@ -332,6 +332,18 @@ This workflow trains on `datasets/processed/aero_design_dataset.csv` (ignored by
    ```
    Passing the built-in readiness gate (~5 percent MAPE vs target range plus high R²) typically requires hundreds of converged SU2 cases; if metrics plateau around ~8 percent on small N, generate more CFD data before trusting optimization outputs.
 
+6. Interactive optimization (terminal prompts or one-line JSON for search bounds; optimizes CL / CD via the surrogate):
+   ```
+   ./.venv/bin/python ml/interactive_optimize_design.py
+   ```
+   Non-interactive batch mode with a bounds file: `python ml/optimize_design.py --bounds-json path/to/bounds.json --objective max_cl_cd`
+
+7. **Web UI** (sliders + inputs): see `webapp/README.md`. Run from repo root: `uvicorn webapp.main:app --reload --host 127.0.0.1 --port 8000`, then open http://127.0.0.1:8000 . Deploy from GitHub via Render or similar (GitHub Pages cannot run the Python model).
+
+8. **Desktop popup UI** (no browser needed):  
+   `python ml/popup_optimize_design.py`  
+   This opens a local window with sliders/entries, objective selection, and writes results to `results/popup_design_optimization_result.json`.
+
 REFERENCES FOR PAPER:
 =====================
 

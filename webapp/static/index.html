@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Surrogate design optimizer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="bg-grid"></div>
+  <header class="site-header">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">◇</span>
+      <div>
+        <h1>Surrogate design optimizer</h1>
+        <p class="tagline">Search inside your bounds · CL / CD from trained model · validate in SU2 for real decisions</p>
+      </div>
+    </div>
+    <div id="health-pill" class="health-pill" role="status">Checking model…</div>
+  </header>
+
+  <main class="layout">
+    <section class="panel controls" aria-labelledby="bounds-heading">
+      <h2 id="bounds-heading">Search box</h2>
+      <p class="hint">Set min/max for each dimension. Sliders and number fields stay in sync.</p>
+
+      <div id="bound-rows" class="bound-rows"></div>
+
+      <h2 class="section-title">Objective</h2>
+      <div class="objective-cards" role="radiogroup" aria-label="Optimization objective">
+        <label class="obj-card">
+          <input type="radio" name="objective" value="max_cl_cd" checked />
+          <span class="obj-title">Max CL / CD</span>
+          <span class="obj-desc">Best lift-to-drag ratio (within constraints)</span>
+        </label>
+        <label class="obj-card">
+          <input type="radio" name="objective" value="max_cl" />
+          <span class="obj-title">Max CL</span>
+          <span class="obj-desc">Maximize lift, cap drag with max CD</span>
+        </label>
+        <label class="obj-card">
+          <input type="radio" name="objective" value="min_cd" />
+          <span class="obj-title">Min CD</span>
+          <span class="obj-desc">Minimize drag, floor lift with min CL</span>
+        </label>
+      </div>
+
+      <h2 class="section-title">Constraints <span class="sub">(on surrogate predictions)</span></h2>
+      <div class="constraints">
+        <label>
+          Min CL
+          <input type="number" id="min-cl" value="0.7" step="0.05" />
+        </label>
+        <label>
+          Max CD
+          <input type="number" id="max-cd" value="0.2" step="0.01" />
+        </label>
+      </div>
+
+      <details class="advanced">
+        <summary>Advanced</summary>
+        <div class="constraints advanced-grid">
+          <label>BO iterations <input type="number" id="iters" value="20" min="1" max="200" /></label>
+          <label>Initial samples <input type="number" id="init-samples" value="25" min="5" max="500" /></label>
+          <label>Candidate pool <input type="number" id="candidate-pool" value="500" min="50" max="5000" /></label>
+          <label>Random seed <input type="number" id="seed" value="42" min="0" /></label>
+        </div>
+      </details>
+
+      <button type="button" id="run-btn" class="btn-primary" disabled>Run optimization</button>
+      <p id="error-msg" class="error" hidden></p>
+    </section>
+
+    <section class="panel results" aria-labelledby="results-heading">
+      <h2 id="results-heading">Result</h2>
+      <div id="results-empty" class="results-empty">
+        <p>Adjust bounds and constraints, then run. The best design and predicted CL / CD appear here.</p>
+      </div>
+      <div id="results-content" hidden>
+        <div class="metric-cards">
+          <div class="metric">
+            <span class="metric-label">Predicted CL</span>
+            <span class="metric-value" id="out-cl">—</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Predicted CD</span>
+            <span class="metric-value" id="out-cd">—</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">CL / CD</span>
+            <span class="metric-value" id="out-clcd">—</span>
+          </div>
+          <div class="metric wide">
+            <span class="metric-label">Internal score</span>
+            <span class="metric-value mono" id="out-score">—</span>
+          </div>
+        </div>
+        <h3>Best geometry & flow</h3>
+        <dl class="kv" id="out-geometry"></dl>
+        <h3>Full JSON</h3>
+        <pre class="json-out" id="out-json"></pre>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>Backend: FastAPI · Model: joblib surrogate · Not a substitute for CFD validation</p>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
