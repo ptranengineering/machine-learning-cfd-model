@@ -17,11 +17,13 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern, WhiteKernel
 
 from design_feature_utils import augment_design_inputs_v1
+from figure_utils import FIG_DIR, plot_bo_convergence
 
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MODEL = ROOT / "results" / "models" / "design_rf_model.joblib"
 DEFAULT_OUT = ROOT / "results" / "design_optimization_result.json"
+FIG5_PATH = FIG_DIR / "fig5_bo_convergence.png"
 
 # Physical order: thickness, camber, camber_position, AoA (deg), Mach, Reynolds
 RANGE_PARAM_NAMES = (
@@ -118,6 +120,13 @@ def run_surrogate_optimization(
     pred = surrogate.predict(augment_if_needed(x_obs, augment_version))
     y_obj = _objective_vectors(pred[:, 0], pred[:, 1], objective, min_cl, max_cd)
 
+    def _best_cl_cd(obs_x: np.ndarray) -> float:
+        obs_pred = surrogate.predict(augment_if_needed(obs_x, augment_version))
+        cd_safe = np.maximum(obs_pred[:, 1], 1e-12)
+        return float(np.max(obs_pred[:, 0] / cd_safe))
+
+    incumbent_history: list[float] = [_best_cl_cd(x_obs)]
+
     kernel = Matern(nu=2.5) + WhiteKernel(noise_level=1e-6)
     gpr = GaussianProcessRegressor(kernel=kernel, normalize_y=True, random_state=seed)
 
@@ -134,6 +143,7 @@ def run_surrogate_optimization(
 
         x_obs = np.vstack([x_obs, x_next])
         y_obj = np.append(y_obj, y_next)
+        incumbent_history.append(_best_cl_cd(x_obs))
 
     best_idx = int(np.argmax(y_obj))
     best_x = x_obs[best_idx]
@@ -168,6 +178,7 @@ def run_surrogate_optimization(
         },
         "best_internal_score": float(np.max(y_obj)),
         "iterations": iters,
+        "incumbent_history": incumbent_history,
     }
 
 
@@ -193,6 +204,9 @@ def main() -> None:
         default=None,
         help='JSON file: {"geometry_thickness":[lo,hi], ...} for all six keys; otherwise use script defaults.',
     )
+    p.add_argument("--save-figures", action="store_true", help="Save Fig. 5 BO convergence plot.")
+    p.add_argument("--n-seeds", type=int, default=1, help="Number of random seeds for convergence plot (use 5 with --save-figures).")
+    p.add_argument("--cfd-verified-cl-cd", type=float, default=None, help="Optional CFD-verified CL/CD for Fig. 5 reference line.")
     args = p.parse_args()
 
     lo, hi = default_bounds()
@@ -205,23 +219,37 @@ def main() -> None:
             lo[i], hi[i] = float(pair[0]), float(pair[1])
 
     pack = joblib.load(args.model)
-    result = run_surrogate_optimization(
-        pack,
-        lo,
-        hi,
-        objective=args.objective,
-        min_cl=args.min_cl,
-        max_cd=args.max_cd,
-        iters=args.iters,
-        init_samples=args.init_samples,
-        candidate_pool=args.candidate_pool,
-        seed=args.seed,
-    )
+    n_seeds = max(1, args.n_seeds)
+    histories: list[np.ndarray] = []
+    result: dict[str, Any] | None = None
 
+    for s in range(n_seeds):
+        run_result = run_surrogate_optimization(
+            pack,
+            lo,
+            hi,
+            objective=args.objective,
+            min_cl=args.min_cl,
+            max_cd=args.max_cd,
+            iters=args.iters,
+            init_samples=args.init_samples,
+            candidate_pool=args.candidate_pool,
+            seed=args.seed + s * 17,
+        )
+        histories.append(np.array(run_result["incumbent_history"], dtype=float))
+        if s == 0:
+            result = run_result
+
+    assert result is not None
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(f"[DONE] optimization result -> {args.output}")
     print(f"[INFO] best_internal_score={result['best_internal_score']:.6f}")
+
+    if args.save_figures:
+        optimum_cl_cd = result["predicted"].get("CL_CD") or 0.0
+        plot_bo_convergence(histories, float(optimum_cl_cd), FIG5_PATH, args.cfd_verified_cl_cd)
+        print(f"[DONE] figure -> {FIG5_PATH}")
 
 
 if __name__ == "__main__":

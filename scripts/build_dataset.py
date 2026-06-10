@@ -8,19 +8,33 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from su2_utils import (  # noqa: E402
+    DEFAULT_MIN_RMS_DROP,
+    DEFAULT_MIN_RMS_RHO_FINAL,
+    MAX_ABS_CL,
+    MIN_CD,
+    RANS_MIN_RMS_DROP,
+    RANS_MIN_RMS_RHO_FINAL,
+    load_history_features,
+)
+
 
 ROOT = Path(__file__).resolve().parent.parent
 CASE_ROOT = ROOT / "su2_cases"
 OUTPUT_DEFAULT = ROOT / "datasets" / "processed" / "aero_ml_dataset.csv"
-CFG_DEFAULT = CASE_ROOT / "inv_NACA0012.cfg"
+CFG_DEFAULT = CASE_ROOT / "rans_NACA0012.cfg"
 QUALITY_REPORT_DEFAULT = ROOT / "datasets" / "processed" / "aero_ml_quality_report.csv"
 DESIGN_RAW_DEFAULT = ROOT / "datasets" / "raw" / "aero_design_raw.csv"
 DESIGN_OUTPUT_DEFAULT = ROOT / "datasets" / "processed" / "aero_design_dataset.csv"
+DESIGN_QUALITY_REPORT_DEFAULT = ROOT / "datasets" / "processed" / "aero_design_quality_report.csv"
 
 
 def parse_cfg_value(cfg_path: Path, key: str) -> float | None:
@@ -54,48 +68,6 @@ def extract_coeff(forces_file: Path, coeff: str) -> float | None:
         if match:
             return float(match.group(1))
     return None
-
-
-def load_history_features(history_path: Path) -> dict:
-    default = {
-        "rms_rho_final": 0.0,
-        "rms_rho_u_final": 0.0,
-        "rms_rho_v_final": 0.0,
-        "rms_rho_e_final": 0.0,
-        "rms_rho_drop": 0.0,
-        "convergence_rate": 0.0,
-        "has_history": 0,
-    }
-    if not history_path.exists():
-        return default
-
-    df = pd.read_csv(history_path)
-    cols = {c.strip().strip('"'): c for c in df.columns}
-    req = ["rms[Rho]", "rms[RhoU]", "rms[RhoV]", "rms[RhoE]"]
-    if not all(c in cols for c in req):
-        return default
-
-    rho = pd.to_numeric(df[cols["rms[Rho]"]], errors="coerce").dropna()
-    rho_u = pd.to_numeric(df[cols["rms[RhoU]"]], errors="coerce").dropna()
-    rho_v = pd.to_numeric(df[cols["rms[RhoV]"]], errors="coerce").dropna()
-    rho_e = pd.to_numeric(df[cols["rms[RhoE]"]], errors="coerce").dropna()
-    if rho.empty:
-        return default
-
-    n = len(rho)
-    x = np.arange(n, dtype=float)
-    # RMS values are log10-like; fit linear slope for convergence trend.
-    slope = float(np.polyfit(x, rho.to_numpy(dtype=float), 1)[0]) if n > 1 else np.nan
-
-    return {
-        "rms_rho_final": float(rho.iloc[-1]),
-        "rms_rho_u_final": float(rho_u.iloc[-1]) if not rho_u.empty else 0.0,
-        "rms_rho_v_final": float(rho_v.iloc[-1]) if not rho_v.empty else 0.0,
-        "rms_rho_e_final": float(rho_e.iloc[-1]) if not rho_e.empty else 0.0,
-        "rms_rho_drop": float(rho.iloc[0] - rho.iloc[-1]),
-        "convergence_rate": float(slope) if np.isfinite(slope) else 0.0,
-        "has_history": 1,
-    }
 
 
 def build_dataset(case_root: Path, cfg_path: Path, geometry_id: str) -> pd.DataFrame:
@@ -213,6 +185,44 @@ def quality_gate(
     return merged
 
 
+def design_quality_gate(
+    df: pd.DataFrame,
+    min_rms_rho_final: float,
+    min_rms_drop: float,
+    max_abs_cl: float,
+    min_cd: float,
+) -> pd.DataFrame:
+    checks = pd.DataFrame(index=df.index)
+    checks["pass_status_success"] = df["status"] == "success"
+    checks["pass_cd_positive"] = df["cd"] >= min_cd
+    checks["pass_cl_physical"] = df["cl"].abs() <= max_abs_cl
+    if "has_history" in df.columns and (df["has_history"].fillna(0).astype(int) == 1).any():
+        checks["pass_history"] = df["has_history"].fillna(0).astype(int) == 1
+    else:
+        checks["pass_history"] = True
+    if "rms_rho_final" in df.columns and df["rms_rho_final"].notna().any():
+        checks["pass_converged_residual"] = df["rms_rho_final"] <= min_rms_rho_final
+        checks["pass_residual_drop"] = df["rms_rho_drop"] >= min_rms_drop
+    else:
+        checks["pass_converged_residual"] = True
+        checks["pass_residual_drop"] = True
+    if "converged" in df.columns and df["converged"].notna().any():
+        checks["pass_converged_flag"] = df["converged"].fillna(False).astype(bool)
+    else:
+        checks["pass_converged_flag"] = True
+
+    # Base gate: successful SU2 run with physically plausible coefficients.
+    checks["quality_pass"] = (
+        checks["pass_status_success"]
+        & checks["pass_cd_positive"]
+        & checks["pass_cl_physical"]
+        & checks["pass_history"]
+    )
+    # Strict tier for high-confidence training subsets (convergence + residuals).
+    checks["strict_pass"] = checks.all(axis=1)
+    return pd.concat([df.copy(), checks], axis=1)
+
+
 def build_design_dataset(raw_csv_paths: list[Path]) -> pd.DataFrame:
     dfs: list[pd.DataFrame] = []
     for raw_csv in raw_csv_paths:
@@ -244,15 +254,16 @@ def build_design_dataset(raw_csv_paths: list[Path]) -> pd.DataFrame:
     if missing:
         raise ValueError(f"Design raw dataset missing columns: {missing}")
 
-    df = df[df["status"] == "success"].copy()
-    if df.empty:
-        raise RuntimeError("No successful design-space CFD cases found.")
-
     for col in ["geometry_thickness", "geometry_camber", "geometry_camber_pos", "aoa", "mach", "reynolds", "cl", "cd"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
-    df = df[(df["cd"] >= 0.002) & (df["cd"] <= 2.0) & (df["cl"].abs() <= 3.0)].copy()
-    if df.empty:
-        raise RuntimeError("No design rows survived physical quality filters (cd/cl bounds).")
+    if "converged" not in df.columns:
+        df["converged"] = np.nan
+    if "has_history" not in df.columns:
+        df["has_history"] = 0
+    if "rms_rho_final" not in df.columns:
+        df["rms_rho_final"] = np.nan
+    if "rms_rho_drop" not in df.columns:
+        df["rms_rho_drop"] = np.nan
     df["cl_cd"] = df["cl"] / df["cd"]
     df["geometry_param_1"] = df["geometry_thickness"]
     df["geometry_param_2"] = df["geometry_camber"]
@@ -281,33 +292,122 @@ def main() -> None:
         help="One or more raw design sweep CSVs to merge before processing.",
     )
     parser.add_argument("--design-output", type=Path, default=DESIGN_OUTPUT_DEFAULT)
-    parser.add_argument("--min-rms-rho-final", type=float, default=-6.0)
-    parser.add_argument("--min-rms-drop", type=float, default=4.0)
-    parser.add_argument("--max-abs-cl", type=float, default=3.0)
-    parser.add_argument("--min-cd", type=float, default=1e-6)
-    parser.add_argument("--allow-failed-quality", action="store_true")
+    parser.add_argument("--design-quality-report", type=Path, default=DESIGN_QUALITY_REPORT_DEFAULT)
+    parser.add_argument(
+        "--min-rms-rho-final",
+        type=float,
+        default=None,
+        help="Strict-tier max final log10 RMS density residual.",
+    )
+    parser.add_argument(
+        "--min-rms-drop",
+        type=float,
+        default=None,
+        help="Strict-tier min RMS density drop.",
+    )
+    parser.add_argument("--max-abs-cl", type=float, default=MAX_ABS_CL)
+    parser.add_argument("--min-cd", type=float, default=MIN_CD)
+    parser.add_argument(
+        "--require-strict-convergence",
+        action="store_true",
+        help="Only keep rows passing full convergence/residual checks (strict_pass).",
+    )
+    parser.add_argument(
+        "--allow-failed-quality",
+        action="store_true",
+        help="Include quality-failed rows in the output dataset (not recommended).",
+    )
+    parser.add_argument(
+        "--fail-on-rejects",
+        action="store_true",
+        help="Abort if any row fails the active quality gate (default: exclude rejects and continue).",
+    )
     args = parser.parse_args()
 
+    if args.min_rms_rho_final is None:
+        args.min_rms_rho_final = (
+            RANS_MIN_RMS_RHO_FINAL if args.dataset_type == "design" else DEFAULT_MIN_RMS_RHO_FINAL
+        )
+    if args.min_rms_drop is None:
+        args.min_rms_drop = RANS_MIN_RMS_DROP if args.dataset_type == "design" else DEFAULT_MIN_RMS_DROP
+
     if args.dataset_type == "design":
-        design_df = build_design_dataset(list(args.design_raw))
-        numeric_cols = [
-            "geometry_param_1",
-            "geometry_param_2",
-            "geometry_param_3",
-            "AoA",
-            "Mach",
-            "Re",
-            "CL",
-            "CD",
-            "cl_cd",
-        ]
+        raw_df = build_design_dataset(list(args.design_raw))
+        quality_df = design_quality_gate(
+            df=raw_df,
+            min_rms_rho_final=args.min_rms_rho_final,
+            min_rms_drop=args.min_rms_drop,
+            max_abs_cl=args.max_abs_cl,
+            min_cd=args.min_cd,
+        )
+        gate_col = "strict_pass" if args.require_strict_convergence else "quality_pass"
+        passed = quality_df[quality_df[gate_col]].copy()
+        failed = quality_df[~quality_df[gate_col]].copy()
+        strict_n = int(quality_df["strict_pass"].sum()) if "strict_pass" in quality_df.columns else 0
+
+        if passed.empty:
+            raise RuntimeError(
+                f"No design rows passed {'strict' if args.require_strict_convergence else 'base'} quality gate. "
+                f"Review {args.design_quality_report} (failed={len(failed)})."
+            )
+        if args.allow_failed_quality:
+            passed = quality_df.copy()
+
+        if args.fail_on_rejects and len(failed) > 0:
+            display_cols = [
+                c
+                for c in [
+                    "design_id",
+                    "status",
+                    "cl",
+                    "cd",
+                    "converged",
+                    "rms_rho_final",
+                    "quality_pass",
+                    "strict_pass",
+                ]
+                if c in failed.columns
+            ]
+            raise ValueError(
+                "Design quality gate failed for one or more cases. "
+                f"Review {args.design_quality_report}\n"
+                f"{failed[display_cols].head(10).to_string(index=False)}"
+            )
+
+        if len(failed) > 0:
+            print(
+                f"[WARN] excluded {len(failed)} rejected rows from dataset "
+                f"(see {args.design_quality_report})"
+            )
+
+        design_df = passed[
+            [
+                "geometry_param_1",
+                "geometry_param_2",
+                "geometry_param_3",
+                "AoA",
+                "Mach",
+                "Re",
+                "CL",
+                "CD",
+                "cl_cd",
+            ]
+        ].copy()
+        numeric_cols = list(design_df.columns)
         if design_df[numeric_cols].isna().any().any():
             raise ValueError("NaN values found in design dataset numeric fields.")
         if not np.isfinite(design_df[numeric_cols].to_numpy(dtype=float)).all():
             raise ValueError("Non-finite values found in design dataset numeric fields.")
+
         args.design_output.parent.mkdir(parents=True, exist_ok=True)
         design_df.to_csv(args.design_output, index=False)
-        print(f"[DONE] wrote {len(design_df)} rows to {args.design_output}")
+        quality_df.to_csv(args.design_quality_report, index=False)
+        print(f"[DONE] wrote {len(design_df)} rows to {args.design_output} (gate={gate_col})")
+        print(f"[DONE] design quality report -> {args.design_quality_report}")
+        print(
+            f"[INFO] gate passed={len(passed)} failed={len(failed)} "
+            f"(base quality_pass={int(quality_df['quality_pass'].sum())}, strict_pass={strict_n})"
+        )
         return
 
     df = build_dataset(args.case_root, args.cfg, args.geometry_id)

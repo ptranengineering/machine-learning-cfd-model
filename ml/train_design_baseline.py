@@ -13,34 +13,58 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import ExtraTreesRegressor, RandomForestRegressor
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import Matern, WhiteKernel
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import RepeatedKFold, train_test_split
 from sklearn.multioutput import MultiOutputRegressor
 
 from design_feature_utils import BASE_COLS, augment_design_inputs_v1
+from figure_utils import FIG_DIR, plot_feature_importance, plot_parity_plots
+from metrics_utils import compute_regression_metrics
 
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATA = ROOT / "datasets" / "processed" / "aero_design_dataset.csv"
 DEFAULT_METRICS = ROOT / "results" / "design_baseline_metrics.json"
 DEFAULT_MODEL = ROOT / "results" / "models" / "design_rf_model.joblib"
+FIG3_PATH = FIG_DIR / "fig3_parity_plots.png"
+FIG4_PATH = FIG_DIR / "fig4_feature_importance.png"
 
 
 def rmse(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.sqrt(mean_squared_error(a, b)))
 
 
+def make_gp_model(seed: int) -> MultiOutputRegressor:
+    kernel = Matern(nu=2.5) + WhiteKernel(noise_level=1e-5)
+    return MultiOutputRegressor(
+        GaussianProcessRegressor(
+            kernel=kernel,
+            normalize_y=True,
+            alpha=1e-6,
+            n_restarts_optimizer=2,
+            random_state=seed,
+        )
+    )
+
+
 def evaluate(model, x_train: np.ndarray, x_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray, target_cols: list[str]) -> dict:
     model.fit(x_train, y_train)
     pred = model.predict(x_test)
+    metrics = compute_regression_metrics(y_test, pred, target_cols)
     out = {"targets": {}}
-    for i, target in enumerate(target_cols):
+    for entry in metrics["per_target"]:
+        target = entry["target"]
         out["targets"][target] = {
-            "rmse": rmse(y_test[:, i], pred[:, i]),
-            "mae": float(mean_absolute_error(y_test[:, i], pred[:, i])),
-            "r2": float(r2_score(y_test[:, i], pred[:, i])) if len(y_test) > 1 else None,
+            "rmse": entry["rmse"],
+            "mae": entry["mae"],
+            "r2": entry["r2"],
+            "mape": entry["mape"],
+            "relative_pct_error": entry["relative_pct_error"],
         }
+    out["aggregate"] = metrics["aggregate"]
     return out
 
 
@@ -48,10 +72,11 @@ def summarize_cv_folds(folds: list[dict], target_cols: list[str]) -> dict:
     summary: dict[str, dict[str, float]] = {}
     for target in target_cols:
         summary[target] = {}
-        for metric in ("r2", "rmse", "mae"):
-            vals = [f["targets"][target][metric] for f in folds]
-            summary[target][f"{metric}_mean"] = float(np.mean(vals))
-            summary[target][f"{metric}_std"] = float(np.std(vals))
+        for metric in ("r2", "rmse", "mae", "mape", "relative_pct_error"):
+            vals = [f["targets"][target][metric] for f in folds if f["targets"][target].get(metric) is not None]
+            if vals:
+                summary[target][f"{metric}_mean"] = float(np.mean(vals))
+                summary[target][f"{metric}_std"] = float(np.std(vals))
     return summary
 
 
@@ -80,6 +105,22 @@ def main() -> None:
         help=f"Augment BASE inputs with nonlinear transforms ({', '.join(BASE_COLS)} -> +extras). "
         "If enabled, saved model metadata records augment_version=1.",
     )
+    p.add_argument(
+        "--save-figures",
+        action="store_true",
+        help="Save Fig. 3 (parity plots) and Fig. 4 (feature importance) to results/figures/.",
+    )
+    p.add_argument(
+        "--min-samples",
+        type=int,
+        default=8,
+        help="Minimum rows required unless --smoke-test is set.",
+    )
+    p.add_argument(
+        "--smoke-test",
+        action="store_true",
+        help="Allow training on very small datasets (metrics/readiness not meaningful).",
+    )
     args = p.parse_args()
 
     df = pd.read_csv(args.data)
@@ -95,37 +136,77 @@ def main() -> None:
         x, feature_cols = augment_design_inputs_v1(x)
     y = df[target_cols].to_numpy(dtype=float)
 
-    if len(df) < 8:
-        raise ValueError("Need at least 8 design samples to train baseline reliably.")
+    n_samples = len(df)
+    if n_samples < 1:
+        raise ValueError("Dataset is empty.")
+    if n_samples < args.min_samples and not args.smoke_test:
+        raise ValueError(
+            f"Need at least {args.min_samples} design samples to train baseline reliably "
+            f"(found {n_samples}). Generate more CFD data, or pass --smoke-test for pipeline checks."
+        )
 
-    x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=args.test_size, random_state=args.seed)
+    small_n_mode = args.smoke_test or n_samples < args.min_samples
+    if small_n_mode:
+        print(
+            f"[WARN] small-n training mode ({n_samples} samples): "
+            "holdout/CV metrics and readiness gate are not meaningful."
+        )
 
-    models = {
+    models: dict = {
         "linear_regression": LinearRegression(),
         "random_forest": MultiOutputRegressor(RandomForestRegressor(n_estimators=500, random_state=args.seed)),
-        "extra_trees": MultiOutputRegressor(ExtraTreesRegressor(n_estimators=700, random_state=args.seed)),
     }
-
-    holdout_results = []
-    cv_results = []
-    for model_name, model in models.items():
-        holdout_results.append(
-            {
-                "model": model_name,
-                **evaluate(model, x_train, x_test, y_train, y_test, target_cols),
-            }
+    if not small_n_mode:
+        models["extra_trees"] = MultiOutputRegressor(
+            ExtraTreesRegressor(n_estimators=700, random_state=args.seed)
         )
-        cv_results.append(
-            {
-                "model": model_name,
-                **cross_validate(model, x, y, target_cols, args.seed, args.cv_splits, args.cv_repeats),
-            }
-        )
+        models["gaussian_process"] = make_gp_model(args.seed)
+    elif n_samples >= 4:
+        models["gaussian_process"] = make_gp_model(args.seed)
 
-    best_cv = max(
-        cv_results,
-        key=lambda r: (r["targets"]["CL"]["r2_mean"] + r["targets"]["CD"]["r2_mean"]) / 2.0,
-    )
+    holdout_results: list[dict] = []
+    cv_results: list[dict] = []
+    cv_splits = min(args.cv_splits, n_samples) if n_samples >= 2 else 1
+
+    if small_n_mode:
+        x_train, x_test, y_train, y_test = x, x, y, y
+        for model_name, model in models.items():
+            holdout_results.append(
+                {
+                    "model": model_name,
+                    **evaluate(model, x_train, x_test, y_train, y_test, target_cols),
+                }
+            )
+        best_cv = {"model": "random_forest", "targets": {}}
+        for target in target_cols:
+            best_cv["targets"][target] = {"r2_mean": None, "mae_mean": None}
+    else:
+        x_train, x_test, y_train, y_test = train_test_split(
+            x, y, test_size=args.test_size, random_state=args.seed
+        )
+        for model_name, model in models.items():
+            holdout_results.append(
+                {
+                    "model": model_name,
+                    **evaluate(model, x_train, x_test, y_train, y_test, target_cols),
+                }
+            )
+            if n_samples >= cv_splits and cv_splits >= 2:
+                cv_results.append(
+                    {
+                        "model": model_name,
+                        **cross_validate(
+                            model, x, y, target_cols, args.seed, cv_splits, args.cv_repeats
+                        ),
+                    }
+                )
+        if cv_results:
+            best_cv = max(
+                cv_results,
+                key=lambda r: (r["targets"]["CL"]["r2_mean"] + r["targets"]["CD"]["r2_mean"]) / 2.0,
+            )
+        else:
+            best_cv = holdout_results[0]
 
     target_ranges = {
         "CL": float(np.max(y[:, 0]) - np.min(y[:, 0])),
@@ -136,42 +217,97 @@ def main() -> None:
         "max_mae_pct_of_range_each_target": 5.0,
     }
     readiness_checks = {}
-    for target in target_cols:
-        mae_mean = best_cv["targets"][target]["mae_mean"]
-        readiness_checks[target] = {
-            "r2_mean": best_cv["targets"][target]["r2_mean"],
-            "mae_pct_of_range": float(100.0 * mae_mean / max(target_ranges[target], 1e-12)),
+    if small_n_mode or not cv_results:
+        readiness_checks = {
+            target: {"r2_mean": None, "mae_pct_of_range": None} for target in target_cols
         }
+        readiness_pass = False
+        readiness_status = "SKIP"
+    else:
+        for target in target_cols:
+            mae_mean = best_cv["targets"][target]["mae_mean"]
+            readiness_checks[target] = {
+                "r2_mean": best_cv["targets"][target]["r2_mean"],
+                "mae_pct_of_range": float(100.0 * mae_mean / max(target_ranges[target], 1e-12)),
+            }
+        readiness_pass = all(
+            readiness_checks[target]["r2_mean"] >= readiness_criteria["min_r2_mean_each_target"]
+            and readiness_checks[target]["mae_pct_of_range"]
+            <= readiness_criteria["max_mae_pct_of_range_each_target"]
+            for target in target_cols
+        )
+        readiness_status = "PASS" if readiness_pass else "FAIL"
 
-    readiness_pass = all(
-        readiness_checks[target]["r2_mean"] >= readiness_criteria["min_r2_mean_each_target"]
-        and readiness_checks[target]["mae_pct_of_range"] <= readiness_criteria["max_mae_pct_of_range_each_target"]
-        for target in target_cols
-    )
+    comparison_table = []
+    for hr in holdout_results:
+        for target in target_cols:
+            t = hr["targets"][target]
+            comparison_table.append(
+                {
+                    "model": hr["model"],
+                    "target": target,
+                    "split": "holdout",
+                    "mae": t["mae"],
+                    "rmse": t["rmse"],
+                    "r2": t["r2"],
+                    "mape": t.get("mape"),
+                    "relative_pct_error": t.get("relative_pct_error"),
+                }
+            )
+    for cr in cv_results:
+        for target in target_cols:
+            t = cr["targets"][target]
+            comparison_table.append(
+                {
+                    "model": cr["model"],
+                    "target": target,
+                    "split": "cv_mean",
+                    "mae": t.get("mae_mean"),
+                    "rmse": t.get("rmse_mean"),
+                    "r2": t.get("r2_mean"),
+                    "mape": t.get("mape_mean"),
+                    "relative_pct_error": t.get("relative_pct_error_mean"),
+                }
+            )
+
+    selected_name = best_cv["model"] if isinstance(best_cv.get("model"), str) else "random_forest"
 
     metrics = {
-        "n_samples": int(len(df)),
+        "n_samples": int(n_samples),
         "features": feature_cols,
         "targets": target_cols,
+        "small_n_mode": small_n_mode,
         "holdout_split": {"test_size": args.test_size, "seed": args.seed},
         "cv_strategy": {
-            "type": "RepeatedKFold",
-            "n_splits": args.cv_splits,
+            "type": "RepeatedKFold" if cv_results else "skipped",
+            "n_splits": cv_splits,
             "n_repeats": args.cv_repeats,
             "seed": args.seed,
         },
         "holdout_results": holdout_results,
         "cross_validation_results": cv_results,
-        "selected_model": best_cv["model"],
+        "comparison_table": comparison_table,
+        "selected_model": selected_name,
         "readiness": {
             "criteria": readiness_criteria,
             "checks": readiness_checks,
-            "status": "PASS" if readiness_pass else "FAIL",
+            "status": readiness_status,
         },
     }
 
-    selected_model = models[best_cv["model"]]
+    selected_model = models[selected_name]
     selected_model.fit(x, y)
+
+    if args.save_figures:
+        rf_model = models["random_forest"]
+        rf_model.fit(x_train, y_train)
+        plot_parity_plots(
+            x_test, y_test, rf_model, feature_cols, target_cols, FIG3_PATH,
+            model_label="RF + engineered features" if args.engineer_features else "RF",
+        )
+        plot_feature_importance(rf_model, x_test, y_test, feature_cols, target_cols, FIG4_PATH, seed=args.seed)
+        print(f"[DONE] figures -> {FIG3_PATH}, {FIG4_PATH}")
+
     args.model_out.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(
         {

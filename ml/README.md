@@ -6,15 +6,16 @@ Project Overview:
 This project develops a neural network surrogate model that predicts aerodynamic 
 properties (lift, drag, moment) from airfoil geometry parameters and flow conditions.
 
-The surrogate model runs 50-100x faster than CFD while maintaining <5% error,
-enabling rapid aerodynamic design optimization.
+The surrogate model targets faster-than-CFD inference for design exploration.
+Accuracy depends on dataset size and CFD fidelity — see `results/design_baseline_metrics.json`
+readiness gate (not guaranteed by default).
 
 Key Features:
 - Parametric airfoil generation and CFD simulation
 - Neural network surrogate model development
-- Publication-quality visualization and analysis
+- Evaluation plots and metrics reporting
 - Inference time benchmarking
-- Complete pipeline from data to publication
+- Training pipeline for legacy Solidworks CFD exports (see root README for SU2 design-space path)
 
 Directory Structure:
 ====================
