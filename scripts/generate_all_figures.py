@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate all six publication figures and log results."""
+"""Generate all publication figures and log results."""
 from __future__ import annotations
 
 import subprocess
@@ -12,11 +12,11 @@ PY = ROOT / ".venv" / "bin" / "python"
 
 STEPS = [
     ("Fig 1", [str(PY), str(ROOT / "ml" / "plot_pipeline_architecture.py")]),
-    ("Fig 2", [str(PY), str(ROOT / "ml" / "learning_curve_experiment.py"), "--n-repeats", "2"]),
+    ("Learning curve JSON + Fig 2", [str(PY), str(ROOT / "ml" / "learning_curve_experiment.py")]),
     ("Fig 3-4", [str(PY), str(ROOT / "ml" / "train_design_baseline.py"), "--engineer-features", "--save-figures"]),
     ("Model comparison", [str(PY), str(ROOT / "scripts" / "generate_model_comparison.py")]),
-    ("Fig 5", [str(PY), str(ROOT / "ml" / "optimize_design.py"), "--save-figures", "--n-seeds", "5"]),
-    ("Fig 6", [str(PY), str(ROOT / "ml" / "plot_design_space.py")]),
+    ("Fig 5", [str(PY), str(ROOT / "ml" / "optimize_design.py"), "--objective", "max_cl_cd", "--save-figures", "--n-seeds", "5"]),
+    ("Euler vs RANS", [str(PY), str(ROOT / "ml" / "plot_euler_vs_rans.py")]),
     ("Readiness report", [str(PY), str(ROOT / "scripts" / "generate_research_readiness_report.py")]),
 ]
 

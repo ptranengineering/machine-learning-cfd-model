@@ -4,6 +4,8 @@ Shared regression metrics for surrogate model evaluation.
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
@@ -52,3 +54,26 @@ def compute_regression_metrics(
         "relative_pct_error": float(np.mean([t["relative_pct_error"] for t in per_target])),
     }
     return {"per_target": per_target, "aggregate": aggregate}
+
+
+def benchmark_inference_latency(model, X_sample: np.ndarray, n_repeats: int = 1000) -> dict:
+    """Wall-clock latency for a single surrogate prediction (milliseconds)."""
+    x = np.asarray(X_sample, dtype=float)
+    if x.ndim == 1:
+        x = x.reshape(1, -1)
+
+    for _ in range(10):
+        model.predict(x)
+
+    times_ms: list[float] = []
+    for _ in range(n_repeats):
+        t0 = time.perf_counter()
+        model.predict(x)
+        times_ms.append((time.perf_counter() - t0) * 1000.0)
+
+    arr = np.asarray(times_ms, dtype=float)
+    return {
+        "mean_ms": float(np.mean(arr)),
+        "std_ms": float(np.std(arr)),
+        "n_repeats": int(n_repeats),
+    }

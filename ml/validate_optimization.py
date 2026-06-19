@@ -217,6 +217,9 @@ def main() -> None:
         f"CFD CL={cfd.get('cl')} CD={cfd.get('cd')} | "
         f"errors CL={report['errors']['CL_pct_error']}% CD={report['errors']['CD_pct_error']}%"
     )
+    hull = report.get("within_training_hull") or {}
+    inside = hull.get("all_inside")
+    print(f"[SUMMARY] within_training_hull={inside}")
 
 
 if __name__ == "__main__":

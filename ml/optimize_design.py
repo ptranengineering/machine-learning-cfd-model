@@ -248,7 +248,19 @@ def main() -> None:
 
     if args.save_figures:
         optimum_cl_cd = result["predicted"].get("CL_CD") or 0.0
-        plot_bo_convergence(histories, float(optimum_cl_cd), FIG5_PATH, args.cfd_verified_cl_cd)
+        within_hull = None
+        val_path = ROOT / "results" / "optimization_validation.json"
+        if val_path.exists():
+            val = json.loads(val_path.read_text(encoding="utf-8"))
+            hull = val.get("within_training_hull") or {}
+            within_hull = hull.get("all_inside")
+        plot_bo_convergence(
+            histories,
+            float(optimum_cl_cd),
+            FIG5_PATH,
+            args.cfd_verified_cl_cd,
+            within_training_hull=within_hull,
+        )
         print(f"[DONE] figure -> {FIG5_PATH}")
 
 

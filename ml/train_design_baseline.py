@@ -22,7 +22,7 @@ from sklearn.multioutput import MultiOutputRegressor
 
 from design_feature_utils import BASE_COLS, augment_design_inputs_v1
 from figure_utils import FIG_DIR, plot_feature_importance, plot_parity_plots
-from metrics_utils import compute_regression_metrics
+from metrics_utils import benchmark_inference_latency, compute_regression_metrics
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -298,6 +298,29 @@ def main() -> None:
     selected_model = models[selected_name]
     selected_model.fit(x, y)
 
+    rng = np.random.default_rng(args.seed)
+    latency = benchmark_inference_latency(selected_model, rng.random((1, x.shape[1])), n_repeats=1000)
+
+    bo_time_s: float | None = None
+    if not small_n_mode:
+        import time
+
+        from optimize_design import default_bounds, run_surrogate_optimization
+
+        pack = {
+            "model": selected_model,
+            "augment_version": augment_version,
+        }
+        lo, hi = default_bounds()
+        t0 = time.perf_counter()
+        run_surrogate_optimization(pack, lo, hi, iters=20, seed=args.seed)
+        bo_time_s = time.perf_counter() - t0
+
+    metrics["latency_ms"] = {
+        "inference": latency,
+        "bayesian_optimization_20_iter_s": bo_time_s,
+    }
+
     if args.save_figures:
         rf_model = models["random_forest"]
         rf_model.fit(x_train, y_train)
@@ -325,6 +348,21 @@ def main() -> None:
 
     print(f"[DONE] metrics -> {args.metrics}")
     print(f"[DONE] model -> {args.model_out}")
+
+    best_r2 = None
+    if cv_results:
+        best_r2 = (best_cv["targets"]["CL"]["r2_mean"] + best_cv["targets"]["CD"]["r2_mean"]) / 2.0
+    tier = "Exploratory"
+    if readiness_status == "PASS":
+        tier = "Certification"
+    elif best_r2 is not None and best_r2 >= 0.80:
+        tier = "Design"
+    r2_str = f"{best_r2:.4f}" if best_r2 is not None else "n/a"
+    print(
+        f"[SUMMARY] N={n_samples} | best CV R²(avg)={r2_str} "
+        f"| readiness={readiness_status} | tier={tier} "
+        f"| inference={latency['mean_ms']:.3f}±{latency['std_ms']:.3f} ms"
+    )
 
 
 if __name__ == "__main__":

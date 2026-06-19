@@ -22,7 +22,7 @@ COLOR_UI = "#C9A227"
 LANE_BG = {"A": "#EAF2FA", "B": "#E8F6EF", "C": "#FDEEEA"}
 
 
-def _rounded_box(ax, xy, text, facecolor, textcolor="white", width=2.1, height=0.62, fontsize=7.5):
+def _rounded_box(ax, xy, text, facecolor, textcolor="white", width=2.1, height=0.62, fontsize=11):
     x, y = xy
     patch = FancyBboxPatch(
         (x, y), width, height,
@@ -47,7 +47,7 @@ def _arrow(ax, start, end, color="#64748B", style="-|>", lw=1.5):
 
 def plot_pipeline_architecture(out_path: Path = OUTPUT) -> Path:
     apply_paper_style()
-    fig, ax = plt.subplots(figsize=(14, 7.5))
+    fig, ax = plt.subplots(figsize=(16, 10))
     ax.set_xlim(0, 17)
     ax.set_ylim(0, 8.5)
     ax.axis("off")
@@ -77,7 +77,7 @@ def plot_pipeline_architecture(out_path: Path = OUTPUT) -> Path:
     x = 2.0
     prev = None
     for label in a_steps:
-        end = _rounded_box(ax, (x, y_a), label, COLOR_A, width=2.05, height=0.72, fontsize=7)
+        end = _rounded_box(ax, (x, y_a), label, COLOR_A, width=2.05, height=0.72, fontsize=11)
         if prev:
             _arrow(ax, (prev[0] + 0.04, prev[1]), (x - 0.04, y_a + 0.36), COLOR_A)
         prev = end
@@ -89,7 +89,7 @@ def plot_pipeline_architecture(out_path: Path = OUTPUT) -> Path:
     x = 2.0
     prev = None
     for label in b_steps:
-        end = _rounded_box(ax, (x, y_b), label, COLOR_B, width=2.8, height=0.72, fontsize=7.2)
+        end = _rounded_box(ax, (x, y_b), label, COLOR_B, width=2.8, height=0.72, fontsize=11)
         if prev:
             _arrow(ax, (prev[0] + 0.04, prev[1]), (x - 0.04, y_b + 0.36), COLOR_B)
         prev = end
@@ -101,7 +101,7 @@ def plot_pipeline_architecture(out_path: Path = OUTPUT) -> Path:
     x = 2.0
     prev = None
     for label in c_steps:
-        end = _rounded_box(ax, (x, y_c), label, COLOR_C, width=2.6, height=0.72, fontsize=7.5)
+        end = _rounded_box(ax, (x, y_c), label, COLOR_C, width=2.6, height=0.72, fontsize=11)
         if prev:
             _arrow(ax, (prev[0] + 0.04, prev[1]), (x - 0.04, y_c + 0.36), COLOR_C)
         prev = end
@@ -116,7 +116,12 @@ def plot_pipeline_architecture(out_path: Path = OUTPUT) -> Path:
     ))
     ax.text(core_x + core_w / 2, core_y + core_h / 2,
             "Shared ML Core\nPyTorch  ·  scikit-learn  ·  evaluation",
-            ha="center", va="center", fontsize=9.5, color="white", fontweight="bold", zorder=4)
+            ha="center", va="center", fontsize=11, color="white", fontweight="bold", zorder=4)
+
+    # CFD validation loop below ML core
+    val_x, val_y = core_x + core_w * 0.28, core_y - 0.95
+    _rounded_box(ax, (val_x, val_y), "validate_optimization.py", COLOR_A, width=3.2, height=0.72, fontsize=11)
+    _arrow(ax, (core_x + core_w / 2, core_y), (val_x + 1.6, val_y + 0.72), COLOR_CORE, lw=1.8)
 
     # Merge arrows from lane ends down to core
     _arrow(ax, (12.8, y_a + 0.36), (core_x + core_w * 0.25, core_y + core_h), COLOR_A, lw=1.8)
@@ -131,13 +136,13 @@ def plot_pipeline_architecture(out_path: Path = OUTPUT) -> Path:
     core_right = (core_x + core_w, core_y + core_h / 2)
     for i, label in enumerate(ui_labels):
         x = start_x + i * 1.35
-        _rounded_box(ax, (x, ui_y), label, COLOR_UI, textcolor=C_INK, width=ui_w, height=0.85, fontsize=7.2)
+        _rounded_box(ax, (x, ui_y), label, COLOR_UI, textcolor=C_INK, width=ui_w, height=0.85, fontsize=11)
         _arrow(ax, core_right, (x - 0.02, ui_y + 0.42), COLOR_UI, lw=1.4)
         core_right = (x + ui_w / 2, ui_y + 0.85)
 
     ax.text(11.0, 1.15, "Deployment interfaces", fontsize=9, fontweight="semibold", color="#64748B")
 
-    return save_figure(fig, out_path)
+    return save_figure(fig, out_path, dpi=280)
 
 
 def main() -> None:
