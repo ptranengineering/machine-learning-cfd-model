@@ -295,6 +295,12 @@ def main() -> None:
     p.add_argument("--append-raw-output", action="store_true")
     p.add_argument("--skip-completed", action="store_true", help="Skip design_ids already successful in raw-output.")
     p.add_argument("--limit", type=int, default=0)
+    p.add_argument(
+        "--max-new",
+        type=int,
+        default=0,
+        help="Stop after running this many new cases (0 = run all pending). Use for batch sessions.",
+    )
     p.add_argument("--manifest", type=Path, default=None, help="Write sweep manifest JSON (default: run dir).")
     p.add_argument(
         "--min-rms-rho-final",
@@ -345,8 +351,13 @@ def main() -> None:
     base_cfg_text = cfg_path.read_text(encoding="utf-8")
     base_cfl = parse_cfg_cfl(base_cfg_text)
     require_convergence = not args.no_convergence_check
+    n_new = 0
 
     for i, row in df.iterrows():
+        if args.max_new > 0 and n_new >= args.max_new:
+            print(f"[INFO] reached --max-new={args.max_new}; stopping batch session")
+            break
+
         design_id = str(row["design_id"])
         if design_id in completed_ids:
             continue
@@ -428,6 +439,7 @@ def main() -> None:
         }
         (case_dir / "case_meta.json").write_text(json.dumps(case_meta, indent=2), encoding="utf-8")
 
+        n_new += 1
         rows.append(
             {
                 "run_id": run_id,
